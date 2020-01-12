@@ -13,10 +13,12 @@ module OM.Kubernetes (
   launch,
   getClusterGoal,
   findPeers,
+  delete,
   KManager,
   newKManager,
   Namespace(..),
   PodSpec(..),
+  PodName(..),
 ) where
 
 
@@ -38,11 +40,11 @@ import Network.TLS (clientShared, sharedCAStore, defaultParamsClient,
 import Network.TLS.Extra.Cipher (ciphersuite_default)
 import OM.Deploy.Types (ClusterName, PeerOrdinal, legionPeer,
   ClusterGoal(ClusterGoal), NodeName, parseLegionPeer)
-import OM.HTTP (BearerToken(BearerToken))
+import OM.HTTP (BearerToken(BearerToken), AllTypes)
 import OM.Legion (Peer)
 import Servant.API (Description, (:>), JSON, Get, ReqBody, PostNoContent,
   (:<|>)((:<|>)), NoContent(NoContent), Header', Required, Strict,
-  Capture)
+  Capture, DeleteNoContent)
 import Servant.Client (client, runClientM, BaseUrl(BaseUrl), mkClientEnv,
   Scheme(Https), ClientEnv)
 import Web.HttpApiData (ToHttpApiData, FromHttpApiData)
@@ -84,6 +86,10 @@ type PodsApi =
     Description "Post a pod definition"
     :> ReqBody '[JSON] Value
     :> PostNoContent '[JSON] NoContent
+  :<|>
+    Description "Delete a pod"
+    :> Capture "pod-name" PodName
+    :> DeleteNoContent '[AllTypes] NoContent
 
 
 {- | A representation of a Friendlee K8S service. -}
@@ -118,6 +124,23 @@ instance FromJSON PodList where
     PodList <$> mapM ((.: "metadata") >=> (.: "name")) list
 
 
+{- | Delete a pod. -}
+delete :: forall m pod. (MonadIO m, PodSpec pod)
+  => KManager pod
+  -> Namespace
+  -> ClusterName
+  -> PeerOrdinal
+  -> m ()
+delete manager namespace clusterName peer = do
+  token <- getServiceAccountToken
+  let
+    (pods :<|> _) = client (Proxy @KubernetesApi) token
+    (_ :<|> _ :<|> del) = pods namespace
+    req = del (podName (Proxy @pod) clusterName peer)
+
+  (liftIO . (`runClientM` mkEnv manager)) req >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
 
 
 {- | Launch a new legion cluster node. -}
@@ -131,13 +154,12 @@ launch manager namespace clusterName peer = do
   token <- getServiceAccountToken
   let
     (pods :<|> _) = client (Proxy @KubernetesApi) token
-    (_ :<|> post) = pods namespace
+    (_ :<|> post :<|> _) = pods namespace
+    req = post (podSpec (Proxy @pod) clusterName peer)
 
-  (liftIO . (`runClientM` mkEnv manager)) (
-      post (podSpec (Proxy @pod) clusterName peer)
-    ) >>= \case
-      Left err -> fail (show err)
-      Right NoContent -> pure ()
+  (liftIO . (`runClientM` mkEnv manager)) req >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
 
 
 {- | Get the k8s service account token. -}
@@ -241,8 +263,22 @@ newtype Namespace = Namespace {
   )
 
 
-{- | Construct a pod spec. -}
+{- | The class of types that can represent a kubernetes pod. -}
 class PodSpec a where
+  {- | Produe the full pod spec. -}
   podSpec :: proxy a -> ClusterName -> PeerOrdinal -> Value
+
+  {- | Produe just the name of the pod. -}
+  podName :: proxy a -> ClusterName -> PeerOrdinal -> PodName
+
+
+{- | The name of a pod. -}
+newtype PodName = PodName {
+    unPodName :: Text
+  }
+  deriving newtype (
+    Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
+    FromJSON, ToJSONKey, FromJSONKey
+  )
 
 
