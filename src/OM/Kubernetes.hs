@@ -2,56 +2,141 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 {- | Kubernetes interface utilities. -}
 module OM.Kubernetes (
+  newKManager,
+  mkStartupMode,
   launch,
   getClusterGoal,
   findPeers,
   delete,
+  selfTerminate,
   KManager,
-  newKManager,
-  Namespace(..),
-  PodSpec(..),
-  PodName(..),
 ) where
 
 
+import Control.Concurrent (threadDelay)
 import Control.Monad ((>=>))
-import Control.Monad.IO.Class (liftIO, MonadIO)
-import Data.Aeson (FromJSON, parseJSON, Value, withObject, (.:), ToJSON,
-  ToJSONKey, FromJSONKey)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Logger (MonadLoggerIO, logDebug, logWarn)
+import Data.Aeson ((.:), (.=), FromJSON, FromJSONKey, ToJSON, ToJSONKey,
+  Value, object, parseJSON, toJSON, withObject)
 import Data.Default.Class (def)
+import Data.Map (Map)
 import Data.Proxy (Proxy(Proxy))
 import Data.Set (Set)
-import Data.String (IsString)
+import Data.String (IsString, fromString)
 import Data.Text (Text)
 import Data.X509.CertificateStore (CertificateStore, readCertificateStore)
 import Network.Connection (TLSSettings(TLSSettings))
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (mkManagerSettings)
-import Network.TLS (clientShared, sharedCAStore, defaultParamsClient,
-  clientSupported, supportedCiphers, clientUseServerNameIndication)
+import Network.HostName (getHostName)
+import Network.TLS (clientShared, clientSupported,
+  clientUseServerNameIndication, defaultParamsClient, sharedCAStore,
+  supportedCiphers)
 import Network.TLS.Extra.Cipher (ciphersuite_default)
-import OM.Deploy.Types (ClusterName, PeerOrdinal, legionPeer,
-  ClusterGoal(ClusterGoal), NodeName, parseLegionPeer)
 import OM.HTTP (BearerToken(BearerToken), AllTypes)
-import OM.Legion (Peer)
-import Servant.API (Description, (:>), JSON, Get, ReqBody, PostNoContent,
-  (:<|>)((:<|>)), NoContent(NoContent), Header', Required, Strict,
-  Capture, DeleteNoContent)
-import Servant.Client (client, runClientM, BaseUrl(BaseUrl), mkClientEnv,
-  Scheme(Https), ClientEnv)
-import Web.HttpApiData (ToHttpApiData, FromHttpApiData)
+import OM.Legion (StartupMode(JoinCluster, NewCluster), ClusterGoal,
+  ClusterName, Peer, legionPeer, parseLegionPeer)
+import OM.Show (showj, showt)
+import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Capture,
+  DeleteNoContent, Description, Get, Header', JSON, PostNoContent,
+  QueryParam, ReqBody, Required, Strict)
+import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
+  client, mkClientEnv, runClientM)
+import System.Environment (getEnv)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text.IO as TIO
 import qualified Text.Megaparsec as M
 import qualified Text.Megaparsec.Char.Lexer as ML
+
+
+{- | A handle on the kubernetes service. -}
+data KManager = KManager {
+       kmNamespace :: Namespace,
+         kmCluster :: ClusterName,
+            kmSelf :: Peer,
+         kmManager :: Manager,
+                      {- ^
+                        An http client manager configured to work against
+                        the kubernetes api.
+                      -}
+    kmSpecTemplate :: SpecTemplate
+  }
+
+
+{- | Create a new KManager. -}
+newKManager
+  :: ( MonadIO m
+     )
+  => m KManager
+newKManager = liftIO $ do
+    hostname <- getHostName
+    namespace <- fromString <$> getEnv "OM_KUBERNETES_NAMESPACE"
+    case parseLegionPeer (fromString hostname) of
+      Nothing -> fail $ "The host name doesn't work: " <> show hostname
+      Just (clusterName, self) ->
+        readCertificateStore crtLocation >>= \case
+          Nothing -> fail "Can't load K8S CA certificate."
+          Just store -> do
+            manager <-
+              newManager
+                   (
+                     mkManagerSettings
+                       (k8sTLSSettings store)
+                       Nothing
+                   )
+            specTemplate <- getSpecTemplate manager namespace clusterName self
+            pure KManager {
+                   kmNamespace = namespace,
+                     kmCluster = clusterName,
+                        kmSelf = self,
+                     kmManager = manager,
+                kmSpecTemplate = specTemplate
+              }
+  where
+    getSpecTemplate
+      :: (MonadIO m)
+      => Manager
+      -> Namespace
+      -> ClusterName
+      -> Peer
+      -> m SpecTemplate
+    getSpecTemplate manager namespace clusterName peer = do
+      token <- getServiceAccountToken
+      let
+        (pods :<|> _) = client (Proxy @KubernetesApi) token
+        (_ :<|> _ :<|> _ :<|> get) = pods namespace
+        req = get (legionPeer clusterName peer) (Just True)
+
+      (liftIO . (`runClientM` mkEnv_ manager)) req >>= \case
+        Left err -> fail (show err)
+        Right template -> pure template
+
+    k8sTLSSettings :: CertificateStore -> TLSSettings
+    k8sTLSSettings store =
+      TLSSettings $
+        (defaultParamsClient mempty mempty) {
+          clientShared = def {
+            sharedCAStore = store
+          },
+          clientSupported = def {
+            supportedCiphers = ciphersuite_default
+          },
+          clientUseServerNameIndication = True
+        }
+    crtLocation :: FilePath
+    crtLocation = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
 
 {- | A subset of the kubernetes api spec. -}
@@ -85,11 +170,16 @@ type PodsApi =
   :<|>
     Description "Post a pod definition"
     :> ReqBody '[JSON] Value
-    :> PostNoContent '[JSON] NoContent
+    :> PostNoContent '[AllTypes] NoContent
   :<|>
     Description "Delete a pod"
     :> Capture "pod-name" PodName
     :> DeleteNoContent '[AllTypes] NoContent
+  :<|>
+    Description "Get a pod spec"
+    :> Capture "pod-name" PodName
+    :> QueryParam "export" Bool
+    :> Get '[JSON] SpecTemplate
 
 
 {- | A representation of a Friendlee K8S service. -}
@@ -103,7 +193,7 @@ instance FromJSON ClusterInfo where
         . (
             (.: "metadata")
             >=> (.: "annotations")
-            >=> (.: "friendlee-cluster-goal")
+            >=> (.: "cluster-goal")
             >=> parseGoal
           )
     where
@@ -111,12 +201,12 @@ instance FromJSON ClusterInfo where
       parseGoal str =
         case M.parseMaybe (ML.decimal @()) str of
           Nothing -> fail $ "Invalid cluster goal: " <> show str
-          Just goal -> pure (ClusterGoal goal)
+          Just goal -> pure (fromInteger goal)
 
 
 {- | A list of pods. -}
 newtype PodList = PodList {
-    unPodList :: [NodeName]
+    unPodList :: [PodName]
   }
 instance FromJSON PodList where
   parseJSON = withObject "Pod List" $ \o -> do
@@ -125,41 +215,82 @@ instance FromJSON PodList where
 
 
 {- | Delete a pod. -}
-delete :: forall m pod. (MonadIO m, PodSpec pod)
-  => KManager pod
-  -> Namespace
-  -> ClusterName
-  -> PeerOrdinal
+delete
+  :: ( MonadIO m
+     )
+  => KManager
+  -> Peer
   -> m ()
-delete manager namespace clusterName peer = do
+delete manager peer = do
   token <- getServiceAccountToken
   let
     (pods :<|> _) = client (Proxy @KubernetesApi) token
-    (_ :<|> _ :<|> del) = pods namespace
-    req = del (podName (Proxy @pod) clusterName peer)
+    (_ :<|> _ :<|> del :<|> _) = pods (kmNamespace manager)
+    req = del (podName manager peer)
 
   (liftIO . (`runClientM` mkEnv manager)) req >>= \case
     Left err -> fail (show err)
     Right NoContent -> pure ()
+
+
+{- | Get the pod name. -}
+podName :: KManager -> Peer -> PodName
+podName = legionPeer . kmCluster
 
 
 {- | Launch a new legion cluster node. -}
-launch :: forall m pod. (MonadIO m, PodSpec pod)
-  => KManager pod
-  -> Namespace
-  -> ClusterName
-  -> PeerOrdinal
+launch
+  :: ( MonadLoggerIO m
+     )
+  => KManager
+  -> Peer
   -> m ()
-launch manager namespace clusterName peer = do
+launch manager peer = do
   token <- getServiceAccountToken
   let
     (pods :<|> _) = client (Proxy @KubernetesApi) token
-    (_ :<|> post :<|> _) = pods namespace
-    req = post (podSpec (Proxy @pod) clusterName peer)
+    (_ :<|> post :<|> _) = pods (kmNamespace manager)
+    req = post (podSpec manager peer)
 
+  $(logDebug) $ "Launching: " <> showj (podSpec manager peer)
   (liftIO . (`runClientM` mkEnv manager)) req >>= \case
-    Left err -> fail (show err)
+    Left err -> do
+      $(logDebug) $ "Failed with: " <> showt err
+      fail (show err)
     Right NoContent -> pure ()
+
+
+{- | Generate a pod spec. -}
+podSpec :: KManager -> Peer -> Value
+podSpec manager peer =
+  let
+    spec = kmSpecTemplate manager
+    name = legionPeer (kmCluster manager) peer
+  in
+    toJSON spec {
+      stMeta = Map.insert "name" name (stMeta spec),
+      stSpec = Map.insert "hostname" name (stSpec spec)
+    }
+  
+
+
+{- | A pod spec template. -}
+data SpecTemplate = SpecTemplate {
+    stMeta :: Map Text Value,
+    stSpec :: Map Text Value
+  }
+instance FromJSON SpecTemplate where
+  parseJSON = withObject "Spec object" $ \o ->
+    SpecTemplate
+      <$> o .: "metadata"
+      <*> o .: "spec"
+instance ToJSON SpecTemplate where
+  toJSON t =
+    object [
+      "metadata" .= stMeta t,
+      "spec" .= stSpec t
+    ]
+
 
 
 {- | Get the k8s service account token. -}
@@ -172,104 +303,64 @@ getServiceAccountToken =
 
 
 {- | Get the cluster goal from the service annotations. -}
-getClusterGoal :: forall m pod. (MonadIO m)
-  => KManager pod
-  -> Namespace
-  -> ClusterName
+getClusterGoal
+  :: ( MonadIO m
+     )
+  => KManager
   -> m ClusterGoal
-getClusterGoal manager namespace clusterName = do
+getClusterGoal manager = do
   token <- getServiceAccountToken
   let
     _ :<|> req = client (Proxy @KubernetesApi) token
-  (liftIO . (`runClientM` mkEnv manager)) (req namespace clusterName) >>= \case
-    Left err -> fail (show err)
-    Right v -> pure (ciClusterGoal v)
+  (liftIO . (`runClientM` mkEnv manager))
+      (req (kmNamespace manager) (kmCluster manager))
+    >>= \case
+      Left err -> fail (show err)
+      Right v -> pure (ciClusterGoal v)
 
 
-mkEnv :: KManager pod -> ClientEnv
-mkEnv manager =
+mkEnv :: KManager -> ClientEnv
+mkEnv = mkEnv_ . kmManager 
+
+
+mkEnv_ :: Manager -> ClientEnv
+mkEnv_ manager =
   mkClientEnv
-    (unKManager manager)
+    manager
     (BaseUrl Https "kubernetes.default.svc" 443 "")
 
 
 
 {- | Query Kubernetes for all the peers in a cluster. -}
-findPeers :: (MonadIO m)
-  => KManager pod
-  -> Namespace
-  -> ClusterName
+findPeers
+  :: (MonadIO m)
+  => KManager
   -> m (Set Peer)
-findPeers manager namespace clusterName = do
+findPeers manager = do
   token <- getServiceAccountToken
   let
+    clusterName = kmCluster manager
     pods :<|> _ = client (Proxy @KubernetesApi) token
-    req :<|> _ = pods namespace
+    req :<|> _ = pods (kmNamespace manager)
   (liftIO . (`runClientM` mkEnv manager)) req >>= \case
     Left err -> fail (show err)
     Right nodes ->
       (pure . Set.fromList) [
-        legionPeer clusterName ord
-        | node <- unPodList nodes
-        , Just (c, ord) <- [parseLegionPeer node]
+        peer
+        | pod <- unPodList nodes
+        , Just (c, peer) <- [parseLegionPeer (unPodName pod)]
         , c == clusterName
       ]
 
 
-{- | An http client manager configured to work against the kubernetes api. -}
-newtype KManager pod = KManager {
-    unKManager :: Manager
-  }
-
-
-{- | Create a new KManager. -}
-newKManager :: (MonadIO m) => m (KManager pod)
-newKManager =
-    liftIO $
-      readCertificateStore crtLocation >>= \case
-        Nothing -> fail "Can't load K8S CA certificate."
-        Just store ->
-          KManager <$>
-            newManager
-              (
-                mkManagerSettings
-                  (k8sTLSSettings store)
-                  Nothing
-              )
-  where
-    k8sTLSSettings :: CertificateStore -> TLSSettings
-    k8sTLSSettings store =
-      TLSSettings $
-        (defaultParamsClient mempty mempty) {
-          clientShared = def {
-            sharedCAStore = store
-          },
-          clientSupported = def {
-            supportedCiphers = ciphersuite_default
-          },
-          clientUseServerNameIndication = True
-        }
-    crtLocation :: FilePath
-    crtLocation = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-
-
 {- | A Kubernetes namespace. -}
 newtype Namespace = Namespace {
-    unNamespace :: Text
+    _unNamespace :: Text
   }
   deriving newtype (
     Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
     FromJSON, ToJSONKey, FromJSONKey
   )
-
-
-{- | The class of types that can represent a kubernetes pod. -}
-class PodSpec a where
-  {- | Produe the full pod spec. -}
-  podSpec :: proxy a -> ClusterName -> PeerOrdinal -> Value
-
-  {- | Produe just the name of the pod. -}
-  podName :: proxy a -> ClusterName -> PeerOrdinal -> PodName
 
 
 {- | The name of a pod. -}
@@ -280,5 +371,30 @@ newtype PodName = PodName {
     Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
     FromJSON, ToJSONKey, FromJSONKey
   )
+
+
+{- | Figure out how we are starting up. -}
+mkStartupMode :: (MonadIO m)
+  => KManager
+  -> m (StartupMode e)
+mkStartupMode kmanager = do
+    let
+      self = kmSelf kmanager
+      clusterName = kmCluster kmanager
+    goal <- getClusterGoal kmanager
+    peers <- Set.delete self <$> findPeers kmanager
+    pure $
+      case Set.minView peers of
+        Nothing -> NewCluster self goal clusterName
+        Just (peer, _) -> JoinCluster self clusterName peer
+
+
+{- | Terminate this pod. -}
+selfTerminate :: (MonadLoggerIO m) => KManager -> m void
+selfTerminate manager = do
+  $(logWarn) "Self terminating."
+  delete manager (kmSelf manager)
+  liftIO (threadDelay 2_000_000)
+  selfTerminate manager
 
 
