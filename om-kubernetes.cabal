@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                om-kubernetes
-version:             1.0.1.0
+version:             1.0.1.1
 synopsis:            om-kubernetes
 description:         Haskell Kubernetes utilities.
 homepage:            https://github.com/owensmurray/om-kubernetes
@@ -13,7 +13,9 @@ maintainer:          rick@owensmurray.com
 copyright:           2019 Owens Murray, LLC.
 -- category:            
 build-type:          Simple
-extra-source-files:  README.md
+extra-source-files:
+  README.md
+  k8s/k8s.mustache
 cabal-version:       >=1.10
 
 library
