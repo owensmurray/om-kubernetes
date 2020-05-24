@@ -19,6 +19,7 @@ module OM.Kubernetes (
   delete,
   selfTerminate,
   KManager,
+  k8sConfig,
 ) where
 
 
@@ -52,13 +53,15 @@ import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Capture,
   QueryParam, ReqBody, Required, Strict)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
   client, mkClientEnv, runClientM)
-import System.Environment (getEnv)
+import System.Environment (getArgs, getEnv)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text.IO as TIO
 import qualified Text.Megaparsec as M
 import qualified Text.Megaparsec.Char.Lexer as ML
+import qualified Text.Mustache as Mustache (Template, substitute)
+import qualified Text.Mustache.Compile as Mustache (embedSingleTemplate)
 
 
 {- | A handle on the kubernetes service. -}
@@ -396,5 +399,25 @@ selfTerminate manager = do
   delete manager (kmSelf manager)
   liftIO (threadDelay 2_000_000)
   selfTerminate manager
+
+
+{- |
+  A command-line program that generates Kubernetes configs for
+  self-managed clusters
+-}
+k8sConfig :: IO ()
+k8sConfig =
+    getArgs >>= \case
+      [name, image] ->
+        TIO.putStr
+          (
+            Mustache.substitute
+              template
+              (object ["name" .= name, "image" .= image])
+          )
+      _ -> fail "Usage: k8s-legion <name> <image>"
+  where
+    template :: Mustache.Template
+    template = $(Mustache.embedSingleTemplate "k8s/k8s.mustache")
 
 
