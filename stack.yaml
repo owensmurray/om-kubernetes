@@ -8,10 +8,11 @@ extra-deps:
 - om-fork-0.5.1.0
 - om-http-0.1.5.1
 - om-json-0.2.5.1
-- om-legion-6.1.0.0
+- om-legion-6.1.0.1
 - om-lift-0.1.0.2
 - om-logging-0.4.0.1
 - om-powerstate-4.2.1.0
 - om-show-0.1.1.0
 - om-socket-0.7.0.2
+- servant-flatten-0.2
 resolver: lts-14.27
