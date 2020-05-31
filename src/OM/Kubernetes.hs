@@ -2,12 +2,14 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 {- | Kubernetes interface utilities. -}
 module OM.Kubernetes (
@@ -28,7 +30,7 @@ import Control.Monad ((>=>))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (MonadLoggerIO, logDebug, logWarn)
 import Data.Aeson ((.:), (.=), FromJSON, FromJSONKey, ToJSON, ToJSONKey,
-  Value, object, parseJSON, toJSON, withObject)
+  Value, encode, object, parseJSON, toJSON, withObject)
 import Data.Default.Class (def)
 import Data.Map (Map)
 import Data.Proxy (Proxy(Proxy))
@@ -48,11 +50,13 @@ import OM.HTTP (BearerToken(BearerToken), AllTypes)
 import OM.Legion (StartupMode(JoinCluster, NewCluster), ClusterGoal,
   ClusterName, Peer, legionPeer, parseLegionPeer)
 import OM.Show (showj, showt)
-import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Capture,
-  DeleteNoContent, Description, Get, Header', JSON, PostNoContent,
-  QueryParam, ReqBody, Required, Strict)
+import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
+  Capture, DeleteNoContent, Description, Get, Header', JSON, MimeRender,
+  PatchNoContent, PostNoContent, QueryParam, ReqBody, Required, Strict,
+  contentType, mimeRender)
+import Servant.API.Flatten (flatten)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
-  client, mkClientEnv, runClientM)
+  ClientM, client, mkClientEnv, runClientM)
 import System.Environment (getArgs, getEnv)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import qualified Data.Map as Map
@@ -69,12 +73,11 @@ data KManager = KManager {
        kmNamespace :: Namespace,
          kmCluster :: ClusterName,
             kmSelf :: Peer,
-         kmManager :: Manager,
+         kmManager :: Manager
                       {- ^
                         An http client manager configured to work against
                         the kubernetes api.
                       -}
-    kmSpecTemplate :: SpecTemplate
   }
 
 
@@ -99,32 +102,13 @@ newKManager = liftIO $ do
                        (k8sTLSSettings store)
                        Nothing
                    )
-            specTemplate <- getSpecTemplate manager namespace clusterName self
             pure KManager {
                    kmNamespace = namespace,
                      kmCluster = clusterName,
                         kmSelf = self,
-                     kmManager = manager,
-                kmSpecTemplate = specTemplate
+                     kmManager = manager
               }
   where
-    getSpecTemplate
-      :: (MonadIO m)
-      => Manager
-      -> Namespace
-      -> ClusterName
-      -> Peer
-      -> m SpecTemplate
-    getSpecTemplate manager namespace clusterName peer = do
-      token <- getServiceAccountToken
-      let
-        (pods :<|> _) = client (Proxy @KubernetesApi) token
-        (_ :<|> _ :<|> _ :<|> get) = pods namespace
-        req = get (legionPeer clusterName peer) (Just True)
-
-      (liftIO . (`runClientM` mkEnv_ manager)) req >>= \case
-        Left err -> fail (show err)
-        Right template -> pure template
 
     k8sTLSSettings :: CertificateStore -> TLSSettings
     k8sTLSSettings store =
@@ -155,15 +139,40 @@ type KubernetesApi =
         :> "pods"
         :> PodsApi
 
-      :<|> Description "Get the cluster service."
+      :<|> Description "Services API."
         :> "api"
         :> "v1"
         :> "namespaces"
         :> Capture "namespace" Namespace
         :> "services"
         :> Capture "cluster-name" ClusterName
-        :> Get '[JSON] ClusterInfo
+        :> ServicesApi
     )
+
+
+{- | A subset of the kubernetes api spec related to services. -}
+type ServicesApi =
+    Description "Get the cluster service."
+    :> Get '[JSON] ClusterInfo
+  :<|>
+    Description "Update the cluster spec annotation."
+    :> ReqBody '[SpecTemplatePatch] SpecTemplatePatch
+    :> PatchNoContent '[AllTypes] NoContent
+
+
+{- | Specify how to patch the pod template spec. -}
+newtype SpecTemplatePatch = SpecTemplatePatch SpecTemplate
+instance Accept SpecTemplatePatch where
+  contentType _proxy = "application/json-patch+json"
+instance MimeRender SpecTemplatePatch SpecTemplatePatch where
+  mimeRender _ (SpecTemplatePatch template) =
+    encode [
+      object [
+        "op" .= ("replace" :: Text),
+        "path" .= ("metadata/annotations/pod-template" :: Text),
+        "value" .= toJSON template
+      ]
+    ]
 
 
 {- | A subset of the kubernetes api spec related to pods. -}
@@ -186,19 +195,23 @@ type PodsApi =
 
 
 {- | A representation of a Friendlee K8S service. -}
-newtype ClusterInfo = ClusterInfo {
-    ciClusterGoal :: ClusterGoal
+data ClusterInfo = ClusterInfo {
+     ciClusterGoal :: ClusterGoal,
+    ciSpecTemplate :: Maybe SpecTemplate
   }
 instance FromJSON ClusterInfo where
   parseJSON =
-      withObject "Service object" $
-        fmap ClusterInfo
-        . (
-            (.: "metadata")
-            >=> (.: "annotations")
-            >=> (.: "cluster-goal")
-            >=> parseGoal
-          )
+      withObject "Service object" $ \o -> do
+        goal <-
+          (o .: "metadata")
+          >>= (.: "annotations")
+          >>= (.: "cluster-goal")
+          >>= parseGoal
+        template <-
+          (o .: "metadata")
+          >>= (.: "annotations")
+          >>= (.: "pod-template")
+        pure (ClusterInfo goal template)
     where
       parseGoal :: (Monad m) => Text -> m ClusterGoal
       parseGoal str =
@@ -226,11 +239,7 @@ delete
   -> m ()
 delete manager peer = do
   token <- getServiceAccountToken
-  let
-    (pods :<|> _) = client (Proxy @KubernetesApi) token
-    (_ :<|> _ :<|> del :<|> _) = pods (kmNamespace manager)
-    req = del (podName manager peer)
-
+  let req = kDeletePod token (kmNamespace manager) (podName manager peer)
   (liftIO . (`runClientM` mkEnv manager)) req >>= \case
     Left err -> fail (show err)
     Right NoContent -> pure ()
@@ -248,31 +257,71 @@ launch
   => KManager
   -> Peer
   -> m ()
-launch manager peer = do
-  token <- getServiceAccountToken
-  let
-    (pods :<|> _) = client (Proxy @KubernetesApi) token
-    (_ :<|> post :<|> _) = pods (kmNamespace manager)
-    req = post (podSpec manager peer)
+launch manager peer =
+    ciSpecTemplate <$> getClusterInfo manager >>= \case
+      Nothing -> do
+        template <- getSpecTemplate
+        updateSpecTemplate template
+        launchWithTemplate template
+      Just template ->
+        launchWithTemplate template
+  where
+    getSpecTemplate
+      :: (MonadIO m)
+      => m SpecTemplate
+    getSpecTemplate = do
+      token <- getServiceAccountToken
+      let
+        req =
+          kGetSpecTemplate
+            token
+            (kmNamespace manager)
+            (legionPeer (kmCluster manager) (kmSelf manager))
+      (liftIO . (`runClientM` mkEnv manager)) req >>= \case
+        Left err -> fail (show err)
+        Right template -> pure template
 
-  $(logDebug) $ "Launching: " <> showj (podSpec manager peer)
-  (liftIO . (`runClientM` mkEnv manager)) req >>= \case
-    Left err -> do
-      $(logDebug) $ "Failed with: " <> showt err
-      fail (show err)
-    Right NoContent -> pure ()
+    updateSpecTemplate :: (MonadIO m) => SpecTemplate -> m ()
+    updateSpecTemplate template = do
+      token <- getServiceAccountToken
+      let
+        req =
+          kUpdateSpecTemplate
+            token
+            (kmNamespace manager)
+            (kmCluster manager)
+            (SpecTemplatePatch template)
+
+      liftIO (runClientM req (mkEnv manager)) >>= \case
+        Left err -> fail (show err)
+        Right NoContent -> pure ()
+
+    launchWithTemplate :: (MonadLoggerIO m) => SpecTemplate -> m ()
+    launchWithTemplate template = do
+      token <- getServiceAccountToken
+      let
+        req =
+          kPostPod
+            token
+            (kmNamespace manager)
+            (podSpec manager template peer)
+      $(logDebug) $ "Launching: " <> showj (podSpec manager template peer)
+      (liftIO . (`runClientM` mkEnv manager)) req >>= \case
+        Left err -> do
+          $(logDebug) $ "Failed with: " <> showt err
+          fail (show err)
+        Right NoContent -> pure ()
 
 
 {- | Generate a pod spec. -}
-podSpec :: KManager -> Peer -> Value
-podSpec manager peer =
+podSpec :: KManager -> SpecTemplate -> Peer -> Value
+podSpec manager template peer =
   let
-    spec = kmSpecTemplate manager
     name = legionPeer (kmCluster manager) peer
   in
-    toJSON spec {
-      stMeta = Map.insert "name" name (stMeta spec),
-      stSpec = Map.insert "hostname" name (stSpec spec)
+    toJSON template {
+      stMeta = Map.insert "name" name (stMeta template),
+      stSpec = Map.insert "hostname" name (stSpec template)
     }
   
 
@@ -295,7 +344,6 @@ instance ToJSON SpecTemplate where
     ]
 
 
-
 {- | Get the k8s service account token. -}
 getServiceAccountToken :: (MonadIO m) => m BearerToken
 getServiceAccountToken =
@@ -311,15 +359,19 @@ getClusterGoal
      )
   => KManager
   -> m ClusterGoal
-getClusterGoal manager = do
+getClusterGoal manager = 
+  ciClusterGoal <$> getClusterInfo manager
+
+
+{- | Get the cluster info. -}
+getClusterInfo :: (MonadIO m) => KManager -> m ClusterInfo
+getClusterInfo manager = do
   token <- getServiceAccountToken
-  let
-    _ :<|> req = client (Proxy @KubernetesApi) token
-  (liftIO . (`runClientM` mkEnv manager))
-      (req (kmNamespace manager) (kmCluster manager))
+  let req = kGetClusterInfo token (kmNamespace manager) (kmCluster manager)
+  (liftIO . (`runClientM` mkEnv manager)) req
     >>= \case
       Left err -> fail (show err)
-      Right v -> pure (ciClusterGoal v)
+      Right v -> pure v
 
 
 mkEnv :: KManager -> ClientEnv
@@ -343,8 +395,7 @@ findPeers manager = do
   token <- getServiceAccountToken
   let
     clusterName = kmCluster manager
-    pods :<|> _ = client (Proxy @KubernetesApi) token
-    req :<|> _ = pods (kmNamespace manager)
+    req = kListPods token (kmNamespace manager)
   (liftIO . (`runClientM` mkEnv manager)) req >>= \case
     Left err -> fail (show err)
     Right nodes ->
@@ -419,5 +470,44 @@ k8sConfig =
   where
     template :: Mustache.Template
     template = $(Mustache.embedSingleTemplate "k8s/k8s.mustache")
+
+
+{- *********** Kubernetes Client Functions ********************************** -}
+
+{- | Get the list of pods. -}
+kListPods :: BearerToken -> Namespace -> ClientM PodList
+
+{- | Create a new pod. -}
+kPostPod :: BearerToken -> Namespace -> Value -> ClientM NoContent
+
+{- | Delete a pod. -}
+kDeletePod :: BearerToken -> Namespace -> PodName -> ClientM NoContent
+
+{- | Get the spec of a specific pod, interpreted as a spec template. -}
+kGetSpecTemplate :: BearerToken -> Namespace -> PodName -> ClientM SpecTemplate
+
+{- | Update the pod spec template. -}
+kUpdateSpecTemplate
+  :: BearerToken
+  -> Namespace
+  -> ClusterName
+  -> SpecTemplatePatch
+  -> ClientM NoContent
+
+{- | Get the cluster info, including the cluster goal. -}
+kGetClusterInfo
+  :: BearerToken
+  -> Namespace
+  -> ClusterName
+  -> ClientM ClusterInfo
+
+kListPods
+    :<|> kPostPod
+    :<|> kDeletePod
+    :<|> (\ f a b c -> f a b c (Just True) -> kGetSpecTemplate)
+    :<|> kGetClusterInfo
+    :<|> kUpdateSpecTemplate
+  =
+    client (flatten (Proxy @KubernetesApi))
 
 
