@@ -23,6 +23,7 @@ module OM.Kubernetes (
   getPodSpec,
   patchService,
   getServiceSpec,
+  postService,
 
   -- * Types
   JsonPatch(..),
@@ -136,7 +137,6 @@ type KubernetesApi =
         :> "namespaces"
         :> Capture "namespace" Namespace
         :> "services"
-        :> Capture "service-name" ServiceName
         :> ServicesApi
     )
 
@@ -144,9 +144,15 @@ type KubernetesApi =
 {- | A subset of the kubernetes api spec related to services. -}
 type ServicesApi =
     Description "Get the cluster service."
+    :> Capture "service-name" ServiceName
     :> Get '[JSON] ServiceSpec
   :<|>
+    Description "Post a new serivce."
+    :> ReqBody '[JSON] ServiceSpec
+    :> PostNoContent '[AllTypes] NoContent
+  :<|>
     Description "Update the cluster spec annotation."
+    :> Capture "service-name" ServiceName
     :> ReqBody '[JsonPatch] JsonPatch
     :> PatchNoContent '[AllTypes] NoContent
 
@@ -285,6 +291,24 @@ getServiceSpec k service = do
     Right spec -> pure spec
 
 
+{- ==================================== Post a service ====================== -}
+{- | Post a new service. -}
+kPostService
+  :: BearerToken
+  -> Namespace
+  -> ServiceSpec
+  -> ClientM NoContent
+
+{- | Post a new service. -}
+postService :: (MonadIO m) => K8s -> ServiceSpec -> m ()
+postService k service = do
+  token <- getServiceAccountToken
+  let req = kPostService token (kNamespace k) service
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
+
+
 {- ==================================== Other stuff ========================= -}
 
 kListPods
@@ -292,6 +316,7 @@ kListPods
     :<|> kDeletePod
     :<|> (\ f a b c -> f a b c (Just True) -> kGetPodSpec)
     :<|> kGetServiceSpec
+    :<|> kPostService
     :<|> kPatchService
   =
     client (flatten (Proxy @KubernetesApi))
@@ -308,7 +333,7 @@ newtype ServiceName = ServiceName {
 newtype ServiceSpec = ServiceSpec {
     unServiceSpec :: Value
   }
-  deriving newtype (FromJSON)
+  deriving newtype (FromJSON, ToJSON)
 
 
 {- | A pod specification. -}
