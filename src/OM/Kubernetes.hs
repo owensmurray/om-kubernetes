@@ -27,6 +27,7 @@ module OM.Kubernetes (
   postRoleBinding,
   postRole,
   postServiceAccount,
+  postNamespace,
 
   -- * Types
   JsonPatch(..),
@@ -38,6 +39,7 @@ module OM.Kubernetes (
   RoleBindingSpec(..),
   RoleSpec(..),
   ServiceAccountSpec(..),
+  NamespaceSpec(..),
 ) where
 
 
@@ -77,30 +79,35 @@ type KubernetesApi =
     :> "api"
     :> "v1"
     :> "namespaces"
-    :> Capture "namespace" Namespace
     :> (
-        Description "Pods API"
-        :> "pods"
-        :> PodsApi
-      :<|>
-        Description "Services API."
-        :> "services"
-        :> ServicesApi
-      :<|>
-        Description "Role Binding API"
-        :> "rolebindings"
-        :> ReqBody '[JSON] RoleBindingSpec
+        ReqBody '[JSON] NamespaceSpec
         :> PostNoContent '[AllTypes] NoContent
       :<|>
-        Description "Roll API"
-        :> "roles"
-        :> ReqBody '[JSON] RoleSpec
-        :> PostNoContent '[AllTypes] NoContent
-      :<|>
-        Description "Service Account API"
-        :> "serviceaccounts"
-        :> ReqBody '[JSON] ServiceAccountSpec
-        :> PostNoContent '[AllTypes] NoContent
+        Capture "namespace" Namespace
+        :> (
+            Description "Pods API"
+            :> "pods"
+            :> PodsApi
+          :<|>
+            Description "Services API."
+            :> "services"
+            :> ServicesApi
+          :<|>
+            Description "Role Binding API"
+            :> "rolebindings"
+            :> ReqBody '[JSON] RoleBindingSpec
+            :> PostNoContent '[AllTypes] NoContent
+          :<|>
+            Description "Roll API"
+            :> "roles"
+            :> ReqBody '[JSON] RoleSpec
+            :> PostNoContent '[AllTypes] NoContent
+          :<|>
+            Description "Service Account API"
+            :> "serviceaccounts"
+            :> ReqBody '[JSON] ServiceAccountSpec
+            :> PostNoContent '[AllTypes] NoContent
+        )
     )
 
 
@@ -375,9 +382,24 @@ postServiceAccount k serviceAccount = do
     Right NoContent -> pure ()
 
 
+{- ==================================== Post a Namspace ===================== -}
+{- | Post a Namespace. -}
+kPostNamespace :: BearerToken -> NamespaceSpec -> ClientM NoContent
+
+{- | Post a Namespace. -}
+postNamespace :: (MonadIO m) => K8s -> NamespaceSpec -> m ()
+postNamespace k namespace = do
+  token <- getServiceAccountToken
+  let req = kPostNamespace token namespace
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
+
+
 {- ==================================== Other stuff ========================= -}
 
-kListPods
+kPostNamespace
+    :<|> kListPods
     :<|> kPostPod
     :<|> kDeletePod
     :<|> (\ f a b c -> f a b c (Just True) -> kGetPodSpec)
@@ -469,6 +491,13 @@ newtype RoleSpec = RoleSpec {
 {- | The representation of a service account. -}
 newtype ServiceAccountSpec = ServiceAccountSpec {
     unServiceAccountSpec :: Value
+  }
+  deriving newtype (ToJSON, FromJSON)
+
+
+{- | The representation of a Namespace specification. -}
+newtype NamespaceSpec = NamespaceSpec {
+    unNamespaceSpec :: Value
   }
   deriving newtype (ToJSON, FromJSON)
 
