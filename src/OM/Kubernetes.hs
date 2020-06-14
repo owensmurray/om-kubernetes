@@ -25,6 +25,7 @@ module OM.Kubernetes (
   getServiceSpec,
   postService,
   postRoleBinding,
+  postRole,
 
   -- * Types
   JsonPatch(..),
@@ -34,6 +35,7 @@ module OM.Kubernetes (
   ServiceName(..),
   ServiceSpec(..),
   RoleBindingSpec(..),
+  RoleSpec(..),
 ) where
 
 
@@ -64,6 +66,51 @@ import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
 import System.Environment (getEnv)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import qualified Data.Text.IO as TIO
+
+
+{- | A subset of the kubernetes api spec. -}
+type KubernetesApi = 
+  Description "Kubernetes api"
+    :> Header' [Required, Strict] "Authorization" BearerToken
+    :> "api"
+    :> "v1"
+    :> "namespaces"
+    :> Capture "namespace" Namespace
+    :> (
+        Description "Pods API"
+        :> "pods"
+        :> PodsApi
+      :<|>
+        Description "Services API."
+        :> "services"
+        :> ServicesApi
+      :<|>
+        Description "RoleBinding Api"
+        :> "rolebindings"
+        :> ReqBody '[JSON] RoleBindingSpec
+        :> PostNoContent '[AllTypes] NoContent
+      :<|>
+        Description "Roll Api"
+        :> "roles"
+        :> ReqBody '[JSON] RoleSpec
+        :> PostNoContent '[AllTypes] NoContent
+    )
+
+
+{- | A subset of the kubernetes api spec related to services. -}
+type ServicesApi =
+    Description "Get the cluster service."
+    :> Capture "service-name" ServiceName
+    :> Get '[JSON] ServiceSpec
+  :<|>
+    Description "Post a new serivce."
+    :> ReqBody '[JSON] ServiceSpec
+    :> PostNoContent '[AllTypes] NoContent
+  :<|>
+    Description "Update the cluster spec annotation."
+    :> Capture "service-name" ServiceName
+    :> ReqBody '[JsonPatch] JsonPatch
+    :> PatchNoContent '[AllTypes] NoContent
 
 
 {- | A handle on the kubernetes service. -}
@@ -117,46 +164,6 @@ newK8s = liftIO $ do
         }
     crtLocation :: FilePath
     crtLocation = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-
-
-{- | A subset of the kubernetes api spec. -}
-type KubernetesApi = 
-  Description "Kubernetes api"
-    :> Header' [Required, Strict] "Authorization" BearerToken
-    :> "api"
-    :> "v1"
-    :> "namespaces"
-    :> Capture "namespace" Namespace
-    :> (
-        Description "Pods API"
-        :> "pods"
-        :> PodsApi
-      :<|>
-        Description "Services API."
-        :> "services"
-        :> ServicesApi
-      :<|>
-        Description "RoleBinding Api"
-        :> "rolebindings"
-        :> ReqBody '[JSON] RoleBindingSpec
-        :> PostNoContent '[AllTypes] NoContent
-    )
-
-
-{- | A subset of the kubernetes api spec related to services. -}
-type ServicesApi =
-    Description "Get the cluster service."
-    :> Capture "service-name" ServiceName
-    :> Get '[JSON] ServiceSpec
-  :<|>
-    Description "Post a new serivce."
-    :> ReqBody '[JSON] ServiceSpec
-    :> PostNoContent '[AllTypes] NoContent
-  :<|>
-    Description "Update the cluster spec annotation."
-    :> Capture "service-name" ServiceName
-    :> ReqBody '[JsonPatch] JsonPatch
-    :> PatchNoContent '[AllTypes] NoContent
 
 
 {- | Specify how to patch the pod template spec. -}
@@ -319,6 +326,7 @@ kPostRoleBinding
   -> RoleBindingSpec
   -> ClientM NoContent
 
+{- | Post a role binding. -}
 postRoleBinding :: (MonadIO m) => K8s -> RoleBindingSpec -> m ()
 postRoleBinding k roleBinding = do
   token <- getServiceAccountToken
@@ -327,6 +335,19 @@ postRoleBinding k roleBinding = do
     Left err -> fail (show err)
     Right NoContent -> pure ()
 
+
+{- ==================================== Post Role =========================== -}
+{- | Post a Role. -}
+kPostRole :: BearerToken -> Namespace -> RoleSpec -> ClientM NoContent
+
+{- | Post a Role. -}
+postRole :: (MonadIO m) => K8s -> RoleSpec -> m ()
+postRole k role = do
+  token <- getServiceAccountToken
+  let req = kPostRole token (kNamespace k) role
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
 
 
 {- ==================================== Other stuff ========================= -}
@@ -339,6 +360,7 @@ kListPods
     :<|> kPostService
     :<|> kPatchService
     :<|> kPostRoleBinding
+    :<|> kPostRole
   =
     client (flatten (Proxy @KubernetesApi))
 
@@ -409,5 +431,12 @@ mkEnv =
       mkClientEnv
         manager
         (BaseUrl Https "kubernetes.default.svc" 443 "")
+
+
+{- | The representation of a Role. -}
+newtype RoleSpec = RoleSpec {
+    unRoleSpec :: Value
+  }
+  deriving newtype (ToJSON, FromJSON)
 
 
