@@ -101,7 +101,6 @@ newK8s = liftIO $ do
                  kManager = manager
           }
   where
-
     k8sTLSSettings :: CertificateStore -> TLSSettings
     k8sTLSSettings store =
       TLSSettings $
