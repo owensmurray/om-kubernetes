@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                om-kubernetes
-version:             2.0.1.1
+version:             2.0.2.0
 synopsis:            om-kubernetes
 description:         Haskell Kubernetes utilities.
 homepage:            https://github.com/owensmurray/om-kubernetes

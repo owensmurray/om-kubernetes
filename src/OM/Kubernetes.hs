@@ -24,6 +24,7 @@ module OM.Kubernetes (
   patchService,
   getServiceSpec,
   postService,
+  postRoleBinding,
 
   -- * Types
   JsonPatch(..),
@@ -32,6 +33,7 @@ module OM.Kubernetes (
   PodList(..),
   ServiceName(..),
   ServiceSpec(..),
+  RoleBindingSpec(..),
 ) where
 
 
@@ -121,22 +123,23 @@ newK8s = liftIO $ do
 type KubernetesApi = 
   Description "Kubernetes api"
     :> Header' [Required, Strict] "Authorization" BearerToken
+    :> "api"
+    :> "v1"
+    :> "namespaces"
+    :> Capture "namespace" Namespace
     :> (
-      Description "Pods API"
-        :> "api"
-        :> "v1"
-        :> "namespaces"
-        :> Capture "namespace" Namespace
+        Description "Pods API"
         :> "pods"
         :> PodsApi
-
-      :<|> Description "Services API."
-        :> "api"
-        :> "v1"
-        :> "namespaces"
-        :> Capture "namespace" Namespace
+      :<|>
+        Description "Services API."
         :> "services"
         :> ServicesApi
+      :<|>
+        Description "RoleBinding Api"
+        :> "rolebindings"
+        :> ReqBody '[JSON] RoleBindingSpec
+        :> PostNoContent '[AllTypes] NoContent
     )
 
 
@@ -308,6 +311,24 @@ postService k service = do
     Right NoContent -> pure ()
 
 
+{- ==================================== Post Role Binding =================== -}
+{- | Post a role binding. -}
+kPostRoleBinding
+  :: BearerToken
+  -> Namespace
+  -> RoleBindingSpec
+  -> ClientM NoContent
+
+postRoleBinding :: (MonadIO m) => K8s -> RoleBindingSpec -> m ()
+postRoleBinding k roleBinding = do
+  token <- getServiceAccountToken
+  let req = kPostRoleBinding token (kNamespace k) roleBinding
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
+
+
+
 {- ==================================== Other stuff ========================= -}
 
 kListPods
@@ -317,6 +338,7 @@ kListPods
     :<|> kGetServiceSpec
     :<|> kPostService
     :<|> kPatchService
+    :<|> kPostRoleBinding
   =
     client (flatten (Proxy @KubernetesApi))
 
@@ -360,6 +382,13 @@ newtype PodName = PodName {
     Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
     FromJSON, ToJSONKey, FromJSONKey
   )
+
+
+{- | The representation of Role Binding. -}
+newtype RoleBindingSpec = RoleBindingSpec {
+    unRoleBindingSpec :: Value
+  }
+  deriving newtype (ToJSON, FromJSON)
 
 
 {- | Get the k8s service account token. -}
