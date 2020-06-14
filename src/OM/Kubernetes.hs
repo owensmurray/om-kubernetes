@@ -26,6 +26,7 @@ module OM.Kubernetes (
   postService,
   postRoleBinding,
   postRole,
+  postServiceAccount,
 
   -- * Types
   JsonPatch(..),
@@ -36,6 +37,7 @@ module OM.Kubernetes (
   ServiceSpec(..),
   RoleBindingSpec(..),
   RoleSpec(..),
+  ServiceAccountSpec(..),
 ) where
 
 
@@ -85,14 +87,19 @@ type KubernetesApi =
         :> "services"
         :> ServicesApi
       :<|>
-        Description "RoleBinding Api"
+        Description "Role Binding API"
         :> "rolebindings"
         :> ReqBody '[JSON] RoleBindingSpec
         :> PostNoContent '[AllTypes] NoContent
       :<|>
-        Description "Roll Api"
+        Description "Roll API"
         :> "roles"
         :> ReqBody '[JSON] RoleSpec
+        :> PostNoContent '[AllTypes] NoContent
+      :<|>
+        Description "Service Account API"
+        :> "serviceaccounts"
+        :> ReqBody '[JSON] ServiceAccountSpec
         :> PostNoContent '[AllTypes] NoContent
     )
 
@@ -350,6 +357,24 @@ postRole k role = do
     Right NoContent -> pure ()
 
 
+{- ==================================== Post Service Account ================ -}
+{- | Post a service account. -}
+kPostServiceAccount
+  :: BearerToken
+  -> Namespace
+  -> ServiceAccountSpec
+  -> ClientM NoContent
+
+{- | Post a service account. -}
+postServiceAccount :: (MonadIO m) => K8s -> ServiceAccountSpec -> m ()
+postServiceAccount k serviceAccount = do
+  token <- getServiceAccountToken
+  let req = kPostServiceAccount token (kNamespace k) serviceAccount
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> fail (show err)
+    Right NoContent -> pure ()
+
+
 {- ==================================== Other stuff ========================= -}
 
 kListPods
@@ -361,6 +386,7 @@ kListPods
     :<|> kPatchService
     :<|> kPostRoleBinding
     :<|> kPostRole
+    :<|> kPostServiceAccount
   =
     client (flatten (Proxy @KubernetesApi))
 
@@ -436,6 +462,13 @@ mkEnv =
 {- | The representation of a Role. -}
 newtype RoleSpec = RoleSpec {
     unRoleSpec :: Value
+  }
+  deriving newtype (ToJSON, FromJSON)
+
+
+{- | The representation of a service account. -}
+newtype ServiceAccountSpec = ServiceAccountSpec {
+    unServiceAccountSpec :: Value
   }
   deriving newtype (ToJSON, FromJSON)
 
