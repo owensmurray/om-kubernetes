@@ -15,7 +15,6 @@ copyright:           2019 Owens Murray, LLC.
 build-type:          Simple
 extra-source-files:
   README.md
-  k8s/k8s.mustache
 cabal-version:       >=1.10
 
 library
