@@ -38,6 +38,7 @@ library
     om-http            >= 0.1.5.0  && < 0.2,
     om-legion          >= 6.1.0.0  && < 6.2,
     om-show            >= 0.1.1.0  && < 0.2,
+    safe-exceptions    >= 0.1.7.0  && < 0.2,
     servant            >= 0.15     && < 1.16,
     servant-client     >= 0.16.0.1 && < 0.17,
     servant-flatten    >= 0.2      && < 0.3,

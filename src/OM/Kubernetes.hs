@@ -40,16 +40,18 @@ module OM.Kubernetes (
   RoleSpec(..),
   ServiceAccountSpec(..),
   NamespaceSpec(..),
+  Namespace(..),
 ) where
 
 
+import Control.Exception.Safe (throw)
 import Control.Monad ((>=>))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson ((.:), FromJSON, FromJSONKey, ToJSON, ToJSONKey, Value,
   encode, parseJSON, withObject)
 import Data.Default.Class (def)
 import Data.Proxy (Proxy(Proxy))
-import Data.String (IsString, fromString)
+import Data.String (IsString)
 import Data.Text (Text)
 import Data.X509.CertificateStore (CertificateStore, readCertificateStore)
 import Network.Connection (TLSSettings(TLSSettings))
@@ -67,7 +69,6 @@ import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
 import Servant.API.Flatten (flatten)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
   ClientM, client, mkClientEnv, runClientM)
-import System.Environment (getEnv)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import qualified Data.Text.IO as TIO
 
@@ -76,38 +77,45 @@ import qualified Data.Text.IO as TIO
 type KubernetesApi = 
   Description "Kubernetes api"
     :> Header' [Required, Strict] "Authorization" BearerToken
-    :> "api"
-    :> "v1"
-    :> "namespaces"
     :> (
-        ReqBody '[JSON] NamespaceSpec
-        :> PostNoContent '[AllTypes] NoContent
-      :<|>
-        Capture "namespace" Namespace
+        "api"
+        :> "v1"
+        :> "namespaces"
         :> (
-            Description "Pods API"
-            :> "pods"
-            :> PodsApi
-          :<|>
-            Description "Services API."
-            :> "services"
-            :> ServicesApi
-          :<|>
-            Description "Role Binding API"
-            :> "rolebindings"
-            :> ReqBody '[JSON] RoleBindingSpec
+            ReqBody '[JSON] NamespaceSpec
             :> PostNoContent '[AllTypes] NoContent
           :<|>
-            Description "Roll API"
-            :> "roles"
-            :> ReqBody '[JSON] RoleSpec
-            :> PostNoContent '[AllTypes] NoContent
-          :<|>
-            Description "Service Account API"
-            :> "serviceaccounts"
-            :> ReqBody '[JSON] ServiceAccountSpec
-            :> PostNoContent '[AllTypes] NoContent
+            Capture "namespace" Namespace
+            :> (
+                Description "Pods API"
+                :> "pods"
+                :> PodsApi
+              :<|>
+                Description "Services API."
+                :> "services"
+                :> ServicesApi
+              :<|>
+                Description "Roll API"
+                :> "roles"
+                :> ReqBody '[JSON] RoleSpec
+                :> PostNoContent '[AllTypes] NoContent
+              :<|>
+                Description "Service Account API"
+                :> "serviceaccounts"
+                :> ReqBody '[JSON] ServiceAccountSpec
+                :> PostNoContent '[AllTypes] NoContent
+            )
         )
+      :<|>
+        Description "Role Binding API"
+        :> "apis"
+        :> "rbac.authorization.k8s.io"
+        :> "v1"
+        :> "namespaces"
+        :> Capture "namespace" Namespace
+        :> "rolebindings"
+        :> ReqBody '[JSON] RoleBindingSpec
+        :> PostNoContent '[AllTypes] NoContent
     )
 
 
@@ -128,27 +136,21 @@ type ServicesApi =
 
 
 {- | A handle on the kubernetes service. -}
-data K8s = K8s {
-       kNamespace :: Namespace,
-         kManager :: Manager
-                     {- ^
-                       An http client manager configured to work against
-                       the kubernetes api.
-                     -}
+newtype K8s = K8s {
+    kManager :: Manager
+                {- ^
+                  An http client manager configured to work against the
+                  kubernetes api.
+                -}
   }
 
 
-{- |
-  Create a new 'K8s'. The handle will contain an implicit reference
-  to the current namespace, and all operations will be within that
-  namespace. There is no way to break out into a different namespace.
--}
+{- | Create a new 'K8s'. -}
 newK8s
   :: ( MonadIO m
      )
   => m K8s
-newK8s = liftIO $ do
-    namespace <- fromString <$> getEnv "OM_KUBERNETES_NAMESPACE"
+newK8s = liftIO $
     readCertificateStore crtLocation >>= \case
       Nothing -> fail "Can't load K8S CA certificate."
       Just store -> do
@@ -160,8 +162,7 @@ newK8s = liftIO $ do
                    Nothing
                )
         pure K8s {
-               kNamespace = namespace,
-                 kManager = manager
+            kManager = manager
           }
   where
     k8sTLSSettings :: CertificateStore -> TLSSettings
@@ -226,12 +227,12 @@ instance FromJSON PodList where
 kListPods :: BearerToken -> Namespace -> ClientM PodList
 
 {- | List the pods. -}
-listPods :: (MonadIO m) => K8s -> m PodList
-listPods k = do
+listPods :: (MonadIO m) => K8s -> Namespace -> m PodList
+listPods k namespace = do
   token <- getServiceAccountToken
-  let req = kListPods token (kNamespace k)
+  let req = kListPods token namespace
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right list -> pure list
 
 
@@ -240,12 +241,12 @@ listPods k = do
 kPostPod :: BearerToken -> Namespace -> PodSpec -> ClientM NoContent
 
 {- | Create a new pod. -}
-postPod :: (MonadIO m) => K8s -> PodSpec -> m ()
-postPod k spec = do
+postPod :: (MonadIO m) => K8s -> Namespace -> PodSpec -> m ()
+postPod k namespace spec = do
   token <- getServiceAccountToken
-  let req = kPostPod token (kNamespace k) spec
+  let req = kPostPod token namespace spec
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -254,12 +255,12 @@ postPod k spec = do
 kDeletePod :: BearerToken -> Namespace -> PodName -> ClientM NoContent
 
 {- | Delete a pod. -}
-deletePod :: (MonadIO m) => K8s -> PodName -> m ()
-deletePod k podName = do
+deletePod :: (MonadIO m) => K8s -> Namespace -> PodName -> m ()
+deletePod k namespace podName = do
   token <- getServiceAccountToken
-  let req = kDeletePod token (kNamespace k) podName
+  let req = kDeletePod token namespace podName
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
   
 
@@ -268,12 +269,12 @@ deletePod k podName = do
 kGetPodSpec :: BearerToken -> Namespace -> PodName -> ClientM PodSpec
 
 {- | Get the spec of a specific pod. -}
-getPodSpec :: (MonadIO m) => K8s -> PodName -> m PodSpec
-getPodSpec k podName = do
+getPodSpec :: (MonadIO m) => K8s -> Namespace -> PodName -> m PodSpec
+getPodSpec k namespace podName = do
   token <- getServiceAccountToken
-  let req = kGetPodSpec token (kNamespace k) podName
+  let req = kGetPodSpec token namespace podName
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right spec -> pure spec
   
 
@@ -287,16 +288,16 @@ kPatchService
   -> ClientM NoContent
 
 {- | Patch a service. -}
-patchService :: (MonadIO m) => K8s -> ServiceName -> JsonPatch -> m ()
-patchService k service patch = do
+patchService :: (MonadIO m) => K8s -> Namespace -> ServiceName -> JsonPatch -> m ()
+patchService k namespace service patch = do
   token <- getServiceAccountToken
-  let req = kPatchService token (kNamespace k) service patch
+  let req = kPatchService token namespace service patch
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
-{- ==================================== Patch a service ===================== -}
+{- ==================================== Get a service Spec ================== -}
 {- | Get the service spec. -}
 kGetServiceSpec
   :: BearerToken
@@ -305,12 +306,12 @@ kGetServiceSpec
   -> ClientM ServiceSpec
 
 {- | Get the service spec. -}
-getServiceSpec :: (MonadIO m) => K8s -> ServiceName -> m ServiceSpec
-getServiceSpec k service = do
+getServiceSpec :: (MonadIO m) => K8s -> Namespace -> ServiceName -> m ServiceSpec
+getServiceSpec k namespace service = do
   token <- getServiceAccountToken
-  let req = kGetServiceSpec token (kNamespace k) service
+  let req = kGetServiceSpec token namespace service
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right spec -> pure spec
 
 
@@ -323,12 +324,12 @@ kPostService
   -> ClientM NoContent
 
 {- | Post a new service. -}
-postService :: (MonadIO m) => K8s -> ServiceSpec -> m ()
-postService k service = do
+postService :: (MonadIO m) => K8s -> Namespace -> ServiceSpec -> m ()
+postService k namespace service = do
   token <- getServiceAccountToken
-  let req = kPostService token (kNamespace k) service
+  let req = kPostService token namespace service
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -341,12 +342,12 @@ kPostRoleBinding
   -> ClientM NoContent
 
 {- | Post a role binding. -}
-postRoleBinding :: (MonadIO m) => K8s -> RoleBindingSpec -> m ()
-postRoleBinding k roleBinding = do
+postRoleBinding :: (MonadIO m) => K8s -> Namespace -> RoleBindingSpec -> m ()
+postRoleBinding k namespace roleBinding = do
   token <- getServiceAccountToken
-  let req = kPostRoleBinding token (kNamespace k) roleBinding
+  let req = kPostRoleBinding token namespace roleBinding
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -355,12 +356,12 @@ postRoleBinding k roleBinding = do
 kPostRole :: BearerToken -> Namespace -> RoleSpec -> ClientM NoContent
 
 {- | Post a Role. -}
-postRole :: (MonadIO m) => K8s -> RoleSpec -> m ()
-postRole k role = do
+postRole :: (MonadIO m) => K8s -> Namespace -> RoleSpec -> m ()
+postRole k namespace role = do
   token <- getServiceAccountToken
-  let req = kPostRole token (kNamespace k) role
+  let req = kPostRole token namespace role
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -373,12 +374,12 @@ kPostServiceAccount
   -> ClientM NoContent
 
 {- | Post a service account. -}
-postServiceAccount :: (MonadIO m) => K8s -> ServiceAccountSpec -> m ()
-postServiceAccount k serviceAccount = do
+postServiceAccount :: (MonadIO m) => K8s -> Namespace -> ServiceAccountSpec -> m ()
+postServiceAccount k namespace serviceAccount = do
   token <- getServiceAccountToken
-  let req = kPostServiceAccount token (kNamespace k) serviceAccount
+  let req = kPostServiceAccount token namespace serviceAccount
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -392,7 +393,7 @@ postNamespace k namespace = do
   token <- getServiceAccountToken
   let req = kPostNamespace token namespace
   liftIO $ runClientM req (mkEnv k) >>= \case
-    Left err -> fail (show err)
+    Left err -> liftIO (throw err)
     Right NoContent -> pure ()
 
 
@@ -406,9 +407,9 @@ kPostNamespace
     :<|> kGetServiceSpec
     :<|> kPostService
     :<|> kPatchService
-    :<|> kPostRoleBinding
     :<|> kPostRole
     :<|> kPostServiceAccount
+    :<|> kPostRoleBinding
   =
     client (flatten (Proxy @KubernetesApi))
 
