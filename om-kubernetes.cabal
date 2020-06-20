@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                om-kubernetes
-version:             2.0.5.0
+version:             2.1.0.0
 synopsis:            om-kubernetes
 description:         Haskell Kubernetes utilities.
 homepage:            https://github.com/owensmurray/om-kubernetes
@@ -38,6 +38,7 @@ library
     om-http            >= 0.1.5.0  && < 0.2,
     om-legion          >= 6.1.0.0  && < 6.2,
     om-show            >= 0.1.1.0  && < 0.2,
+    safe-exceptions    >= 0.1.7.0  && < 0.2,
     servant            >= 0.15     && < 1.16,
     servant-client     >= 0.16.0.1 && < 0.17,
     servant-flatten    >= 0.2      && < 0.3,
