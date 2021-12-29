@@ -23,21 +23,21 @@ library
   -- other-modules:       
   -- other-extensions:    
   build-depends:
-    aeson              >= 1.4.7.1  && < 1.5,
-    base               >= 4.13     && < 4.14,
-    connection         >= 0.3.1    && < 0.4,
-    data-default-class >= 0.1.2.0  && < 0.2,
-    http-api-data      >= 0.4.1.1  && < 0.5,
-    http-client        >= 0.6.4.1  && < 0.7,
-    http-client-tls    >= 0.3.5.3  && < 0.4,
-    om-http            >= 0.1.5.2  && < 0.2,
-    safe-exceptions    >= 0.1.7.1  && < 0.2,
-    servant            >= 0.16.2   && < 0.17,
-    servant-client     >= 0.16.0.1 && < 0.17,
-    servant-flatten    >= 0.2      && < 0.3,
-    text               >= 1.2.4.0  && < 1.3,
-    tls                >= 1.5.4    && < 1.6,
-    x509-store         >= 1.6.7    && < 1.7
+    aeson              >= 1.5.6.0 && < 1.6,
+    base               >= 4.14    && < 4.15,
+    connection         >= 0.3.1   && < 0.4,
+    data-default-class >= 0.1.2.0 && < 0.2,
+    http-api-data      >= 0.4.2   && < 0.5,
+    http-client        >= 0.6.4.1 && < 0.7,
+    http-client-tls    >= 0.3.5.3 && < 0.4,
+    om-http            >= 0.2.0.0 && < 0.3,
+    safe-exceptions    >= 0.1.7.2 && < 0.2,
+    servant            >= 0.18.3  && < 0.19,
+    servant-client     >= 0.18.3  && < 0.19,
+    servant-flatten    >= 0.2     && < 0.3,
+    text               >= 1.2.4.1 && < 1.3,
+    tls                >= 1.5.6   && < 1.6,
+    x509-store         >= 1.6.7   && < 1.7
   hs-source-dirs:      src
   default-language:    Haskell2010
 

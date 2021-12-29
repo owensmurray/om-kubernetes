@@ -66,7 +66,7 @@ import Network.TLS (clientShared, clientSupported,
   clientUseServerNameIndication, defaultParamsClient, sharedCAStore,
   supportedCiphers)
 import Network.TLS.Extra.Cipher (ciphersuite_default)
-import OM.HTTP (BearerToken(BearerToken), AllTypes)
+import OM.HTTP (BearerToken(BearerToken))
 import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
   Capture, DeleteNoContent, Description, Get, Header', JSON, MimeRender,
   PatchNoContent, PostNoContent, QueryParam, ReqBody, Required, Strict,
@@ -88,7 +88,7 @@ type KubernetesApi =
         :> "namespaces"
         :> (
             ReqBody '[JSON] NamespaceSpec
-            :> PostNoContent '[AllTypes] NoContent
+            :> PostNoContent
           :<|>
             Capture "namespace" Namespace
             :> (
@@ -103,12 +103,12 @@ type KubernetesApi =
                 Description "Roll API"
                 :> "roles"
                 :> ReqBody '[JSON] RoleSpec
-                :> PostNoContent '[AllTypes] NoContent
+                :> PostNoContent
               :<|>
                 Description "Service Account API"
                 :> "serviceaccounts"
                 :> ReqBody '[JSON] ServiceAccountSpec
-                :> PostNoContent '[AllTypes] NoContent
+                :> PostNoContent
             )
         )
       :<|>
@@ -120,7 +120,7 @@ type KubernetesApi =
         :> Capture "namespace" Namespace
         :> "rolebindings"
         :> ReqBody '[JSON] RoleBindingSpec
-        :> PostNoContent '[AllTypes] NoContent
+        :> PostNoContent
     )
 
 
@@ -132,12 +132,12 @@ type ServicesApi =
   :<|>
     Description "Post a new serivce."
     :> ReqBody '[JSON] ServiceSpec
-    :> PostNoContent '[AllTypes] NoContent
+    :> PostNoContent
   :<|>
     Description "Update the cluster spec annotation."
     :> Capture "service-name" ServiceName
     :> ReqBody '[JsonPatch] JsonPatch
-    :> PatchNoContent '[AllTypes] NoContent
+    :> PatchNoContent
 
 
 {- | A handle on the kubernetes service. -}
@@ -204,11 +204,11 @@ type PodsApi =
   :<|>
     Description "Post a pod definition"
     :> ReqBody '[JSON] PodSpec
-    :> PostNoContent '[AllTypes] NoContent
+    :> PostNoContent
   :<|>
     Description "Delete a pod"
     :> Capture "pod-name" PodName
-    :> DeleteNoContent '[AllTypes] NoContent
+    :> DeleteNoContent
   :<|>
     Description "Get a pod spec"
     :> Capture "pod-name" PodName
