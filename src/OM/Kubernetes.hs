@@ -9,7 +9,13 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 
-{- | Kubernetes interface utilities. -}
+{- |
+  Description: Access the Kubernetes API from within the cluster.
+
+  This module provides functions that access and operate on the
+  Kubernetes API.  It is designed to be used from pods running within
+  the K8s cluster itself and it won't work otherwise.
+-}
 module OM.Kubernetes (
   -- * Creating a handle
   newK8s,
