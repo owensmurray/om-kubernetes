@@ -32,6 +32,7 @@ module OM.Kubernetes (
   postRole,
   postServiceAccount,
   postNamespace,
+  getPodTemplate,
 
   -- * Types
   JsonPatch(..),
@@ -45,6 +46,8 @@ module OM.Kubernetes (
   ServiceAccountSpec(..),
   NamespaceSpec(..),
   Namespace(..),
+  PodTemplateName(..),
+  PodTemplateSpec(..),
 ) where
 
 
@@ -108,6 +111,11 @@ type KubernetesApi =
                 :> "serviceaccounts"
                 :> ReqBody '[JSON] ServiceAccountSpec
                 :> PostNoContent
+              :<|>
+                Description "Pod Templates API"
+                :> "podtemplates"
+                :> Capture "template-name" PodTemplateName
+                :> Get '[JSON] PodTemplateSpec
             )
         )
       :<|>
@@ -323,6 +331,29 @@ getServiceSpec k namespace service = do
     Right spec -> pure spec
 
 
+{- ==================================== Get a Pod Template Spec ============= -}
+{- | Get the pod template. -}
+kGetPodTemplate
+  :: BearerToken
+  -> Namespace
+  -> PodTemplateName
+  -> ClientM PodTemplateSpec
+
+{- | Get the pod template. -}
+getPodTemplate
+  :: (MonadIO m)
+  => K8s
+  -> Namespace
+  -> PodTemplateName
+  -> m PodTemplateSpec
+getPodTemplate k namespace templateName = do
+  token <- getServiceAccountToken
+  let req = kGetPodTemplate token namespace templateName
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> liftIO (throw err)
+    Right spec -> pure spec
+
+
 {- ==================================== Post a service ====================== -}
 {- | Post a new service. -}
 kPostService
@@ -417,6 +448,7 @@ kPostNamespace
     :<|> kPatchService
     :<|> kPostRole
     :<|> kPostServiceAccount
+    :<|> kGetPodTemplate
     :<|> kPostRoleBinding
   =
     client (flatten (Proxy @KubernetesApi))
@@ -432,6 +464,20 @@ newtype ServiceName = ServiceName {
 {- | The specification of a service. -}
 newtype ServiceSpec = ServiceSpec {
     unServiceSpec :: Value
+  }
+  deriving newtype (FromJSON, ToJSON)
+
+
+{- | The name of a pod template. -}
+newtype PodTemplateName =  PodTemplateName
+  { unPodTemplateName :: Text
+  }
+  deriving newtype (ToHttpApiData)
+
+
+{- | The specification of a pod template.  -}
+newtype PodTemplateSpec = PodTempalteSpec
+  { unPodTemplateSpec :: Value
   }
   deriving newtype (FromJSON, ToJSON)
 
