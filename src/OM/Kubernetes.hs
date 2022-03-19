@@ -472,7 +472,10 @@ newtype ServiceSpec = ServiceSpec {
 newtype PodTemplateName =  PodTemplateName
   { unPodTemplateName :: Text
   }
-  deriving newtype (ToHttpApiData)
+  deriving newtype (
+    Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
+    FromJSON, ToJSONKey, FromJSONKey
+  )
 
 
 {- | The specification of a pod template.  -}
