@@ -311,7 +311,12 @@ kGetServiceSpec
   -> ClientM ServiceSpec
 
 {- | Get the service spec. -}
-getServiceSpec :: (MonadIO m) => K8s -> Namespace -> ServiceName -> m ServiceSpec
+getServiceSpec
+  :: (MonadIO m)
+  => K8s
+  -> Namespace
+  -> ServiceName
+  -> m ServiceSpec
 getServiceSpec k namespace service = do
   token <- getServiceAccountToken
   let req = kGetServiceSpec token namespace service
