@@ -7,7 +7,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ViewPatterns #-}
 
 {- |
   Description: Access the Kubernetes API from within the cluster.
@@ -69,8 +68,8 @@ import Network.TLS.Extra.Cipher (ciphersuite_default)
 import OM.HTTP (BearerToken(BearerToken))
 import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
   Capture, DeleteNoContent, Description, Get, Header', JSON, MimeRender,
-  PatchNoContent, PostNoContent, QueryParam, ReqBody, Required, Strict,
-  contentType, mimeRender)
+  PatchNoContent, PostNoContent, ReqBody, Required, Strict, contentType,
+  mimeRender)
 import Servant.API.Flatten (flatten)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
   ClientM, client, mkClientEnv, runClientM)
@@ -212,7 +211,6 @@ type PodsApi =
   :<|>
     Description "Get a pod spec"
     :> Capture "pod-name" PodName
-    :> QueryParam "export" Bool
     :> Get '[JSON] PodSpec
 
 
@@ -413,7 +411,7 @@ kPostNamespace
     :<|> kListPods
     :<|> kPostPod
     :<|> kDeletePod
-    :<|> (\ f a b c -> f a b c (Just True) -> kGetPodSpec)
+    :<|> kGetPodSpec
     :<|> kGetServiceSpec
     :<|> kPostService
     :<|> kPatchService
