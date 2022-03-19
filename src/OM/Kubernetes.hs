@@ -7,7 +7,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ViewPatterns #-}
 
 {- |
   Description: Access the Kubernetes API from within the cluster.
@@ -33,6 +32,7 @@ module OM.Kubernetes (
   postRole,
   postServiceAccount,
   postNamespace,
+  getPodTemplate,
 
   -- * Types
   JsonPatch(..),
@@ -46,6 +46,8 @@ module OM.Kubernetes (
   ServiceAccountSpec(..),
   NamespaceSpec(..),
   Namespace(..),
+  PodTemplateName(..),
+  PodTemplateSpec(..),
 ) where
 
 
@@ -69,8 +71,8 @@ import Network.TLS.Extra.Cipher (ciphersuite_default)
 import OM.HTTP (BearerToken(BearerToken))
 import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
   Capture, DeleteNoContent, Description, Get, Header', JSON, MimeRender,
-  PatchNoContent, PostNoContent, QueryParam, ReqBody, Required, Strict,
-  contentType, mimeRender)
+  PatchNoContent, PostNoContent, ReqBody, Required, Strict, contentType,
+  mimeRender)
 import Servant.API.Flatten (flatten)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
   ClientM, client, mkClientEnv, runClientM)
@@ -109,6 +111,11 @@ type KubernetesApi =
                 :> "serviceaccounts"
                 :> ReqBody '[JSON] ServiceAccountSpec
                 :> PostNoContent
+              :<|>
+                Description "Pod Templates API"
+                :> "podtemplates"
+                :> Capture "template-name" PodTemplateName
+                :> Get '[JSON] PodTemplateSpec
             )
         )
       :<|>
@@ -212,7 +219,6 @@ type PodsApi =
   :<|>
     Description "Get a pod spec"
     :> Capture "pod-name" PodName
-    :> QueryParam "export" Bool
     :> Get '[JSON] PodSpec
 
 
@@ -311,10 +317,38 @@ kGetServiceSpec
   -> ClientM ServiceSpec
 
 {- | Get the service spec. -}
-getServiceSpec :: (MonadIO m) => K8s -> Namespace -> ServiceName -> m ServiceSpec
+getServiceSpec
+  :: (MonadIO m)
+  => K8s
+  -> Namespace
+  -> ServiceName
+  -> m ServiceSpec
 getServiceSpec k namespace service = do
   token <- getServiceAccountToken
   let req = kGetServiceSpec token namespace service
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> liftIO (throw err)
+    Right spec -> pure spec
+
+
+{- ==================================== Get a Pod Template Spec ============= -}
+{- | Get the pod template. -}
+kGetPodTemplate
+  :: BearerToken
+  -> Namespace
+  -> PodTemplateName
+  -> ClientM PodTemplateSpec
+
+{- | Get the pod template. -}
+getPodTemplate
+  :: (MonadIO m)
+  => K8s
+  -> Namespace
+  -> PodTemplateName
+  -> m PodTemplateSpec
+getPodTemplate k namespace templateName = do
+  token <- getServiceAccountToken
+  let req = kGetPodTemplate token namespace templateName
   liftIO $ runClientM req (mkEnv k) >>= \case
     Left err -> liftIO (throw err)
     Right spec -> pure spec
@@ -408,12 +442,13 @@ kPostNamespace
     :<|> kListPods
     :<|> kPostPod
     :<|> kDeletePod
-    :<|> (\ f a b c -> f a b c (Just True) -> kGetPodSpec)
+    :<|> kGetPodSpec
     :<|> kGetServiceSpec
     :<|> kPostService
     :<|> kPatchService
     :<|> kPostRole
     :<|> kPostServiceAccount
+    :<|> kGetPodTemplate
     :<|> kPostRoleBinding
   =
     client (flatten (Proxy @KubernetesApi))
@@ -429,6 +464,20 @@ newtype ServiceName = ServiceName {
 {- | The specification of a service. -}
 newtype ServiceSpec = ServiceSpec {
     unServiceSpec :: Value
+  }
+  deriving newtype (FromJSON, ToJSON)
+
+
+{- | The name of a pod template. -}
+newtype PodTemplateName =  PodTemplateName
+  { unPodTemplateName :: Text
+  }
+  deriving newtype (ToHttpApiData)
+
+
+{- | The specification of a pod template.  -}
+newtype PodTemplateSpec = PodTempalteSpec
+  { unPodTemplateSpec :: Value
   }
   deriving newtype (FromJSON, ToJSON)
 
