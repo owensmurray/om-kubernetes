@@ -1,10 +1,10 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 {- |
@@ -56,7 +56,6 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson ((.:), FromJSON, FromJSONKey, ToJSON, ToJSONKey, Value,
   encode, parseJSON, withObject)
 import Data.Default.Class (def)
-import Data.Proxy (Proxy(Proxy))
 import Data.String (IsString)
 import Data.Text (Text)
 import Data.X509.CertificateStore (CertificateStore, readCertificateStore)
@@ -68,82 +67,146 @@ import Network.TLS (clientShared, clientSupported,
   supportedCiphers)
 import Network.TLS.Extra.Cipher (ciphersuite_default)
 import OM.HTTP (BearerToken(BearerToken))
-import Servant.API ((:<|>)((:<|>)), NoContent(NoContent), (:>), Accept,
-  Capture, DeleteNoContent, Description, Get, Header', JSON, MimeRender,
-  PatchNoContent, PostNoContent, ReqBody, Required, Strict, contentType,
-  mimeRender)
-import Servant.API.Flatten (flatten)
+import Servant.API (Accept(contentType), MimeRender(mimeRender),
+  NoContent(NoContent), (:>), Capture, DeleteNoContent, Description, Get,
+  Header', JSON, PatchNoContent, PostNoContent, ReqBody, Required, Strict)
+import Servant.API.Generic (GenericMode((:-)), Generic)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
-  ClientM, client, mkClientEnv, runClientM)
+  ClientM, mkClientEnv, runClientM)
+import Servant.Client.Generic (genericClient)
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import qualified Data.Text.IO as TIO
 
 
 {- | A subset of the kubernetes api spec. -}
-type KubernetesApi = 
-  Description "Kubernetes api"
-    :> Header' [Required, Strict] "Authorization" BearerToken
-    :> (
-        "api"
-        :> "v1"
-        :> "namespaces"
-        :> (
-            ReqBody '[JSON] NamespaceSpec
-            :> PostNoContent
-          :<|>
-            Capture "namespace" Namespace
-            :> (
-                Description "Pods API"
-                :> "pods"
-                :> PodsApi
-              :<|>
-                Description "Services API."
-                :> "services"
-                :> ServicesApi
-              :<|>
-                Description "Roll API"
-                :> "roles"
-                :> ReqBody '[JSON] RoleSpec
-                :> PostNoContent
-              :<|>
-                Description "Service Account API"
-                :> "serviceaccounts"
-                :> ReqBody '[JSON] ServiceAccountSpec
-                :> PostNoContent
-              :<|>
-                Description "Pod Templates API"
-                :> "podtemplates"
-                :> Capture "template-name" PodTemplateName
-                :> Get '[JSON] PodTemplateSpec
-            )
-        )
-      :<|>
-        Description "Role Binding API"
-        :> "apis"
-        :> "rbac.authorization.k8s.io"
-        :> "v1"
-        :> "namespaces"
-        :> Capture "namespace" Namespace
-        :> "rolebindings"
-        :> ReqBody '[JSON] RoleBindingSpec
-        :> PostNoContent
-    )
-
-
-{- | A subset of the kubernetes api spec related to services. -}
-type ServicesApi =
-    Description "Get the cluster service."
-    :> Capture "service-name" ServiceName
-    :> Get '[JSON] ServiceSpec
-  :<|>
-    Description "Post a new serivce."
-    :> ReqBody '[JSON] ServiceSpec
-    :> PostNoContent
-  :<|>
-    Description "Update the cluster spec annotation."
-    :> Capture "service-name" ServiceName
-    :> ReqBody '[JsonPatch] JsonPatch
-    :> PatchNoContent
+data KubernetesApi mode = KubernetesApi
+  { kPostNamespaceR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> ReqBody '[JSON] NamespaceSpec
+      :> PostNoContent
+  , kListPodsR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Pods API"
+      :> "pods"
+      :> Description "List pods"
+      :> Get '[JSON] PodList
+  , kPostPodR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Pods API"
+      :> "pods"
+      :> Description "Post a pod definition"
+      :> ReqBody '[JSON] PodSpec
+      :> PostNoContent
+  , kDeletePodR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Pods API"
+      :> "pods"
+      :> Description "Delete a pod"
+      :> Capture "pod-name" PodName
+      :> DeleteNoContent
+  , kGetPodSpecR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Pods API"
+      :> "pods"
+      :> Description "Get a pod spec"
+      :> Capture "pod-name" PodName
+      :> Get '[JSON] PodSpec
+  , kGetServiceSpecR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Services API."
+      :> "services"
+      :> Description "Get the cluster service."
+      :> Capture "service-name" ServiceName
+      :> Get '[JSON] ServiceSpec
+  , kPostServiceR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Services API."
+      :> "services"
+      :> Description "Post a new serivce."
+      :> ReqBody '[JSON] ServiceSpec
+      :> PostNoContent
+  , kPatchServiceR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Services API."
+      :> "services"
+      :> Description "Update the cluster spec annotation."
+      :> Capture "service-name" ServiceName
+      :> ReqBody '[JsonPatch] JsonPatch
+      :> PatchNoContent
+  , kPostRoleR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Roll API"
+      :> "roles"
+      :> ReqBody '[JSON] RoleSpec
+      :> PostNoContent
+  , kPostServiceAccountR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Service Account API"
+      :> "serviceaccounts"
+      :> ReqBody '[JSON] ServiceAccountSpec
+      :> PostNoContent
+  , kGetPodTemplateR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> Description "Pod Templates API"
+      :> "podtemplates"
+      :> Capture "template-name" PodTemplateName
+      :> Get '[JSON] PodTemplateSpec
+  , kPostRoleBindingR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> Description "Role Binding API"
+      :> "apis"
+      :> "rbac.authorization.k8s.io"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> "rolebindings"
+      :> ReqBody '[JSON] RoleBindingSpec
+      :> PostNoContent
+  }
+  deriving stock (Generic)
 
 
 {- | A handle on the kubernetes service. -}
@@ -201,25 +264,6 @@ instance Accept JsonPatch where
   contentType _proxy = "application/json-patch+json"
 instance MimeRender JsonPatch JsonPatch where
  mimeRender _ = encode
-
-
-{- | A subset of the kubernetes api spec related to pods. -}
-type PodsApi =
-    Description "List pods"
-    :> Get '[JSON] PodList
-  :<|>
-    Description "Post a pod definition"
-    :> ReqBody '[JSON] PodSpec
-    :> PostNoContent
-  :<|>
-    Description "Delete a pod"
-    :> Capture "pod-name" PodName
-    :> DeleteNoContent
-  :<|>
-    Description "Get a pod spec"
-    :> Capture "pod-name" PodName
-    :> Get '[JSON] PodSpec
-
 
 
 {- | A list of pods. -}
@@ -437,20 +481,22 @@ postNamespace k namespace = do
 
 {- ==================================== Other stuff ========================= -}
 
-kPostNamespace
-    :<|> kListPods
-    :<|> kPostPod
-    :<|> kDeletePod
-    :<|> kGetPodSpec
-    :<|> kGetServiceSpec
-    :<|> kPostService
-    :<|> kPatchService
-    :<|> kPostRole
-    :<|> kPostServiceAccount
-    :<|> kGetPodTemplate
-    :<|> kPostRoleBinding
+KubernetesApi
+    { kPostNamespaceR = kPostNamespace
+    , kListPodsR = kListPods
+    , kPostPodR = kPostPod
+    , kDeletePodR = kDeletePod
+    , kGetPodSpecR = kGetPodSpec
+    , kGetServiceSpecR = kGetServiceSpec
+    , kPostServiceR = kPostService
+    , kPatchServiceR = kPatchService
+    , kPostRoleR = kPostRole
+    , kPostServiceAccountR = kPostServiceAccount
+    , kGetPodTemplateR = kGetPodTemplate
+    , kPostRoleBindingR = kPostRoleBinding
+    }
   =
-    client (flatten (Proxy @KubernetesApi))
+    genericClient
 
 
 {- | The name of a service. -}
