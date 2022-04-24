@@ -37,7 +37,6 @@ module OM.Kubernetes (
   JsonPatch(..),
   PodName(..),
   PodSpec(..),
-  PodList(..),
   ServiceName(..),
   ServiceSpec(..),
   RoleBindingSpec(..),
@@ -93,17 +92,15 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Pods API"
       :> "pods"
       :> Description "List pods"
-      :> Get '[JSON] PodList
+      :> Get '[JSON] PodNameList
   , kPostPodR :: mode
       :- Header' [Required, Strict] "Authorization" BearerToken
       :> "api"
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Pods API"
       :> "pods"
       :> Description "Post a pod definition"
       :> ReqBody '[JSON] PodSpec
@@ -114,7 +111,6 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Pods API"
       :> "pods"
       :> Description "Delete a pod"
       :> Capture "pod-name" PodName
@@ -125,7 +121,6 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Pods API"
       :> "pods"
       :> Description "Get a pod spec"
       :> Capture "pod-name" PodName
@@ -136,7 +131,6 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Services API."
       :> "services"
       :> Description "Get the cluster service."
       :> Capture "service-name" ServiceName
@@ -147,7 +141,6 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Services API."
       :> "services"
       :> Description "Post a new serivce."
       :> ReqBody '[JSON] ServiceSpec
@@ -158,7 +151,6 @@ data KubernetesApi mode = KubernetesApi
       :> "v1"
       :> "namespaces"
       :> Capture "namespace" Namespace
-      :> Description "Services API."
       :> "services"
       :> Description "Update the cluster spec annotation."
       :> Capture "service-name" ServiceName
@@ -267,27 +259,27 @@ instance MimeRender JsonPatch JsonPatch where
 
 
 {- | A list of pods. -}
-newtype PodList = PodList {
-    unPodList :: [PodName]
+newtype PodNameList = PodNameList {
+    unPodNameList :: [PodName]
   }
-instance FromJSON PodList where
-  parseJSON = withObject "Pod List" $ \o -> do
+instance FromJSON PodNameList where
+  parseJSON = withObject "Pod List (Names)" $ \o -> do
     list <- o .: "items"
-    PodList <$> mapM ((.: "metadata") >=> (.: "name")) list
+    PodNameList <$> mapM ((.: "metadata") >=> (.: "name")) list
 
 
 {- ==================================== List all pods ======================= -}
 {- | Get the list of pods. -}
-kListPods :: BearerToken -> Namespace -> ClientM PodList
+kListPods :: BearerToken -> Namespace -> ClientM PodNameList
 
-{- | List the pods. -}
-listPods :: (MonadIO m) => K8s -> Namespace -> m PodList
+{- | List the pods, returning a list of names. -}
+listPods :: (MonadIO m) => K8s -> Namespace -> m [PodName]
 listPods k namespace = do
   token <- getServiceAccountToken
   let req = kListPods token namespace
   liftIO $ runClientM req (mkEnv k) >>= \case
     Left err -> liftIO (throw err)
-    Right list -> pure list
+    Right list -> pure (unPodNameList list)
 
 
 {- ==================================== Post a new pod ====================== -}
