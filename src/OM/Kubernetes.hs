@@ -530,8 +530,8 @@ newtype PodSpec = PodSpec {
 
 
 {- | A Kubernetes namespace. -}
-newtype Namespace = Namespace {
-    _unNamespace :: Text
+newtype Namespace = Namespace
+  { unNamespace :: Text
   }
   deriving newtype (
     Eq, Ord, Show, IsString, ToHttpApiData, FromHttpApiData, ToJSON,
