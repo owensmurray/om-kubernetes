@@ -1,6 +1,6 @@
 cabal-version:       3.0
 name:                om-kubernetes
-version:             2.2.1.1
+version:             2.3.0.0
 synopsis:            om-kubernetes
 description:         Haskell Kubernetes utilities.
 homepage:            https://github.com/owensmurray/om-kubernetes
