@@ -32,6 +32,7 @@ module OM.Kubernetes (
   postServiceAccount,
   postNamespace,
   getPodTemplate,
+  queryPods,
 
   -- * Types
   JsonPatch(..),
@@ -46,6 +47,7 @@ module OM.Kubernetes (
   Namespace(..),
   PodTemplateName(..),
   PodTemplateSpec(..),
+  Pod(..),
 ) where
 
 
@@ -57,23 +59,27 @@ import Data.Aeson ((.:), FromJSON, FromJSONKey, ToJSON, ToJSONKey, Value,
 import Data.Default.Class (def)
 import Data.String (IsString)
 import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.X509.CertificateStore (CertificateStore, readCertificateStore)
 import Network.Connection (TLSSettings(TLSSettings))
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (mkManagerSettings)
+import Network.HTTP.Types (urlEncode)
 import Network.TLS (clientShared, clientSupported,
   clientUseServerNameIndication, defaultParamsClient, sharedCAStore,
   supportedCiphers)
 import Network.TLS.Extra.Cipher (ciphersuite_default)
 import OM.HTTP (BearerToken(BearerToken))
 import Servant.API (Accept(contentType), MimeRender(mimeRender),
-  NoContent(NoContent), (:>), Capture, DeleteNoContent, Description, Get,
-  Header', JSON, PatchNoContent, PostNoContent, ReqBody, Required, Strict)
+  NoContent(NoContent), ToHttpApiData(toQueryParam), (:>), Capture,
+  DeleteNoContent, Description, FromHttpApiData, Get, Header', JSON,
+  Optional, PatchNoContent, PostNoContent, QueryParam', ReqBody,
+  Required, Strict)
 import Servant.API.Generic (GenericMode((:-)), Generic)
 import Servant.Client (BaseUrl(BaseUrl), Scheme(Https), ClientEnv,
   ClientM, mkClientEnv, runClientM)
 import Servant.Client.Generic (genericClient)
-import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import qualified Data.ByteString as BS
 import qualified Data.Text.IO as TIO
 
 
@@ -95,6 +101,16 @@ data KubernetesApi mode = KubernetesApi
       :> "pods"
       :> Description "List pods"
       :> Get '[JSON] PodNameList
+  , kQueryPodsR :: mode
+      :- Header' [Required, Strict] "Authorization" BearerToken
+      :> "api"
+      :> "v1"
+      :> "namespaces"
+      :> Capture "namespace" Namespace
+      :> "pods"
+      :> QueryParam' '[Optional, Required] "labelSelectors" LabelSelectors
+      :> Description "List pods"
+      :> Get '[JSON] PodList
   , kPostPodR :: mode
       :- Header' [Required, Strict] "Authorization" BearerToken
       :> "api"
@@ -280,6 +296,46 @@ listPods k namespace = do
   liftIO $ runClientM req (mkEnv k) >>= \case
     Left err -> liftIO (throw err)
     Right list -> pure (unPodNameList list)
+
+
+{- | Query the pods, returning the full JSON for each. -}
+queryPods :: (MonadIO m) => K8s -> Namespace -> [(Text, Text)] -> m [Pod]
+queryPods k namespace selectors = do
+  token <- getServiceAccountToken
+  let req = kQueryPodsR genericClient token namespace (LabelSelectors selectors)
+  liftIO $ runClientM req (mkEnv k) >>= \case
+    Left err -> liftIO (throw err)
+    Right (PodList list) -> pure list
+
+
+newtype LabelSelectors = LabelSelectors
+  { _unLabelSelectors :: [(Text, Text)]
+  }
+instance ToHttpApiData LabelSelectors where
+  toQueryParam (LabelSelectors selectors) =
+    decodeUtf8 $
+      BS.intercalate
+        ","
+        [ urlEncode False (encodeUtf8 (name <> "=" <> value))
+        | (name, value) <- selectors
+        ]
+
+
+newtype PodList = PodList
+  { _unPodList :: [Pod]
+  }
+instance FromJSON PodList where
+  parseJSON =
+    withObject "Pod List" $ \o ->
+      PodList . fmap Pod <$>
+        (o .: "items")
+
+
+newtype Pod = Pod
+  { unPod :: Value
+  }
+  deriving newtype (FromJSON)
+  deriving stock (Show)
 
 
 {- ==================================== Post a new pod ====================== -}
