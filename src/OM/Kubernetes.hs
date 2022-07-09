@@ -334,7 +334,7 @@ instance FromJSON PodList where
 newtype Pod = Pod
   { unPod :: Value
   }
-  deriving newtype (FromJSON)
+  deriving newtype (FromJSON, ToJSON)
   deriving stock (Show)
 
 
