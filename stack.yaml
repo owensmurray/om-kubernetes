@@ -1,8 +1,0 @@
-flags: {}
-packages:
-- .
-extra-deps:
-  - http://localhost:4563/package/om-http-0.2.0.2.tar.gz
-  - http://localhost:4563/package/om-show-0.1.2.1.tar.gz
-  - servant-flatten-0.2
-resolver: lts-19.18

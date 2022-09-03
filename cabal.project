@@ -1,0 +1,4 @@
+packages: .
+package om-kubernetes
+  ghc-options:
+    -Werror
