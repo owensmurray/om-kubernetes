@@ -4,7 +4,7 @@ version:             2.3.1.2
 synopsis:            om-kubernetes
 description:         Haskell Kubernetes utilities.
 homepage:            https://github.com/owensmurray/om-kubernetes
-license:             NONE
+license:             MIT
 license-file:        LICENSE
 author:              Rick Owens
 maintainer:          rick@owensmurray.com
@@ -12,6 +12,7 @@ copyright:           2022 Owens Murray
 -- category:            
 build-type:          Simple
 extra-source-files:
+  LICENSE
   README.md
 
 common warnings
