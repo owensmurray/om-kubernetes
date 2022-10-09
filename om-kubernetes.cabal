@@ -33,7 +33,7 @@ common dependencies
     , http-client         >= 0.7.13.1  && < 0.8
     , http-client-tls     >= 0.3.6.1   && < 0.4
     , http-types          >= 0.12.3    && < 0.13
-    , om-http             >= 0.2.0.1   && < 0.3
+    , om-http             >= 0.2.0.4   && < 0.3
     , safe-exceptions     >= 0.1.7.3   && < 0.2
     , servant             >= 0.19      && < 0.20
     , servant-client      >= 0.19      && < 0.20
