@@ -2,3 +2,10 @@ packages: .
 package om-kubernetes
   ghc-options:
     -Werror
+
+
+source-repository-package
+  type: git
+  location: https://github.com/owensmurray/om-http.git
+  tag: om-http-0.2.0.4
+
